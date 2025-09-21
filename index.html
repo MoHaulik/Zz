@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Planet Terror: Zombie Woods - WebXR Meta Quest 3</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <script type="importmap">
+  {"imports": {"three": "https://unpkg.com/three@0.150.1/build/three.module.js"}}
+  </script>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; font-family: 'Impact', sans-serif; }
+    #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, #330000 0%, #000 100%); }
+    #start-button { width: 100%; height: 100%; font-size: 120px; background: linear-gradient(135deg, #8b0000, #ff0000); color: #fff; border: none; cursor: pointer; text-shadow: 0 0 40px #ff0000, 0 5px 10px #000; animation: pulse 2s infinite; filter: contrast(1.2) saturate(1.5); }
+    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); filter: brightness(1.3); } }
+    .webxr-hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="overlay"><button id="start-button">🧟</button></div>
+  <script type="module">
+    import * as THREE from 'three';
+    
+    let camera, scene, renderer, xrSession, clock = new THREE.Clock();
+    let activeController, controllers = [], activeControllerIndex = 0;
+    let truck, roadSegments = [], zombies = [], bloodSplatters = [], bodyParts = [];
+    let currentLane = 1, targetLane = 1, speed = 0.12, score = 0, time = 0, killCount = 0;
+    let exhaustSmoke = [], mudSplatters = [], debris = [];
+    const LANES = [-0.25, 0, 0.25], SEGMENT_LENGTH = 2;
+    const GROUND_HEIGHT = -0.35;
+    
+    let isControllerSelectionPhase = false, controllerSelectionStartTime = 0;
+    let controllerHoldStartTime = {}, selectedController = null;
+    let currentEnvironment = 'woods'; // Changed environment
+    let environmentCounter = 50;
+    let screenBlood = [], bloodPools = [];
+
+    init();
+    
+    function init() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+      
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 0.9;
+      document.body.appendChild(renderer.domElement);
+      
+      // Dark, moody forest sky
+      scene.fog = new THREE.FogExp2(0x0a0a1a, 0.08);
+      const ambient = new THREE.AmbientLight(0x443366, 0.2);
+      scene.add(ambient);
+      
+      // Moonlight (instead of harsh sun)
+      const moon = new THREE.DirectionalLight(0x88aaff, 0.8);
+      moon.position.set(2, 4, -2);
+      moon.castShadow = true;
+      scene.add(moon);
+      
+      // Neon accent lights
+      const neonPurple = new THREE.PointLight(0xff00ff, 3, 12);
+      neonPurple.position.set(3, GROUND_HEIGHT + 2, -3);
+      scene.add(neonPurple);
+      
+      const neonGreen = new THREE.PointLight(0x00ff00, 2, 10);
+      neonGreen.position.set(-3, GROUND_HEIGHT + 2, -3);
+      scene.add(neonGreen);
+      
+      createTruck();
+      generateRoad();
+      createWoodland(); // Changed from createDesertscape
+      
+      document.getElementById('start-button').addEventListener('click', startARSession);
+      window.addEventListener('resize', onWindowResize);
+    }
+    
+    function createTruck() {
+      truck = new THREE.Group();
+      
+      // Black metal truck body with chrome details
+      const bodyGeo = new THREE.BoxGeometry(0.14, 0.12, 0.35);
+      const bodyMat = new THREE.MeshPhongMaterial({
+        color: 0x0a0a0a,
+        metalness: 0.8,
+        roughness: 0.3,
+        emissive: 0x111111,
+        emissiveIntensity: 0.1
+      });
+      const body = new THREE.Mesh(bodyGeo, bodyMat);
+      body.position.y = 0.06;
+      truck.add(body);
+      
+      // Chrome details and rust patches
+      const chromeGeo = new THREE.BoxGeometry(0.145, 0.02, 0.36);
+      const chromeMat = new THREE.MeshPhongMaterial({
+        color: 0xaaaaaa,
+        metalness: 0.95,
+        roughness: 0.05
+      });
+      const chromeStrip = new THREE.Mesh(chromeGeo, chromeMat);
+      chromeStrip.position.y = 0.11;
+      truck.add(chromeStrip);
+      
+      // Orange rust patches
+      for(let i = 0; i < 4; i++) {
+        const rustGeo = new THREE.PlaneGeometry(0.06, 0.08);
+        const rustMat = new THREE.MeshBasicMaterial({
+          color: 0xff6600,
+          transparent: true,
+          opacity: 0.4
+        });
+        const rust = new THREE.Mesh(rustGeo, rustMat);
+        rust.position.set(
+          (Math.random() - 0.5) * 0.12,
+          0.06 + (Math.random() - 0.5) * 0.05,
+          -0.175 + (Math.random() - 0.5) * 0.15
+        );
+        rust.rotation.z = Math.random() * Math.PI;
+        truck.add(rust);
+      }
+      
+      // Cabin with red tinted windshield
+      const cabinGeo = new THREE.BoxGeometry(0.12, 0.08, 0.12);
+      const cabinMat = new THREE.MeshPhysicalMaterial({
+        color: 0x660000,
+        metalness: 0.3,
+        roughness: 0.2,
+        transparent: true,
+        opacity: 0.6,
+        transmission: 0.3
+      });
+      const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+      cabin.position.set(0, 0.1, -0.08);
+      truck.add(cabin);
+      
+      // Fresh blood streaks on windshield
+      for(let i = 0; i < 3; i++) {
+        const streakGeo = new THREE.PlaneGeometry(0.02, 0.08);
+        const streakMat = new THREE.MeshBasicMaterial({
+          color: 0xff0000,
+          transparent: true,
+          opacity: 0.8
+        });
+        const streak = new THREE.Mesh(streakGeo, streakMat);
+        streak.position.set(
+          (Math.random() - 0.5) * 0.08,
+          0.1,
+          -0.135
+        );
+        streak.rotation.z = Math.random() * 0.3 - 0.15;
+        truck.add(streak);
+      }
+      
+      // Yellow-painted armor plates
+      for(let i = 0; i < 4; i++) {
+        const plateGeo = new THREE.BoxGeometry(0.04, 0.08, 0.02);
+        const plateMat = new THREE.MeshPhongMaterial({
+          color: 0xffaa00,
+          metalness: 0.7,
+          roughness: 0.3,
+          emissive: 0x442200,
+          emissiveIntensity: 0.1
+        });
+        const plate = new THREE.Mesh(plateGeo, plateMat);
+        plate.position.set(
+          i < 2 ? -0.08 : 0.08,
+          0.06,
+          -0.1 + i * 0.08
+        );
+        truck.add(plate);
+      }
+      
+      // Chrome spiked bumper
+      const bumperGeo = new THREE.BoxGeometry(0.16, 0.03, 0.02);
+      const bumperMat = new THREE.MeshPhongMaterial({
+        color: 0xcccccc,
+        metalness: 0.95,
+        roughness: 0.1
+      });
+      const bumper = new THREE.Mesh(bumperGeo, bumperMat);
+      bumper.position.set(0, 0.03, -0.18);
+      truck.add(bumper);
+      
+      // Blood-covered spikes
+      for(let i = 0; i < 7; i++) {
+        const spikeGeo = new THREE.ConeGeometry(0.01, 0.05, 4);
+        const spikeMat = new THREE.MeshPhongMaterial({
+          color: 0x666666,
+          metalness: 0.9,
+          emissive: 0x330000,
+          emissiveIntensity: 0.3
+        });
+        const spike = new THREE.Mesh(spikeGeo, spikeMat);
+        spike.rotation.x = -Math.PI / 2;
+        spike.position.set(-0.07 + i * 0.023, 0.03, -0.21);
+        truck.add(spike);
+      }
+      
+      // Big wheels
+      const wheelGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.025, 12);
+      const wheelMat = new THREE.MeshPhongMaterial({
+        color: 0x1a1a1a,
+        roughness: 0.9
+      });
+      
+      for(let i = 0; i < 4; i++) {
+        const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+        wheel.rotation.z = Math.PI / 2;
+        wheel.position.set(
+          i % 2 === 0 ? -0.08 : 0.08,
+          0.02,
+          i < 2 ? -0.12 : 0.12
+        );
+        truck.add(wheel);
+      }
+      
+      // ## CHANGE: Bright headlights that cast shadows
+      for(let i = 0; i < 2; i++) {
+        const lightGeo = new THREE.SphereGeometry(0.02, 8, 8);
+        const lightMat = new THREE.MeshBasicMaterial({
+          color: 0xffffaa,
+          emissive: 0xffffaa,
+          emissiveIntensity: 3
+        });
+        const headlight = new THREE.Mesh(lightGeo, lightMat);
+        headlight.position.set(i === 0 ? -0.04 : 0.04, 0.06, -0.17);
+        truck.add(headlight);
+        
+        // Spotlight setup
+        const light = new THREE.SpotLight(0xffffaa, 5, 12, Math.PI / 6, 0.4, 1);
+        light.position.copy(headlight.position);
+        light.target.position.set(headlight.position.x, GROUND_HEIGHT, -10); // Target further down the road
+        light.castShadow = true; // Make headlights cast shadows
+        truck.add(light);
+        truck.add(light.target);
+      }
+      
+      truck.position.set(0, GROUND_HEIGHT + 0.06, -0.8);
+      truck.castShadow = true;
+      scene.add(truck);
+    }
+    
+    function generateRoad() {
+      for (let i = 0; i < 25; i++) {
+        createRoadSegment(-1 - i * SEGMENT_LENGTH);
+      }
+    }
+    
+    function createRoadSegment(zPos) {
+      const segment = new THREE.Group();
+      
+      // Dark asphalt with purple tint
+      const roadGeo = new THREE.PlaneGeometry(0.8, SEGMENT_LENGTH + 0.01);
+      const roadMat = new THREE.MeshPhongMaterial({ 
+        color: 0x1a0a2a,
+        roughness: 0.85,
+        emissive: 0x0a0015,
+        emissiveIntensity: 0.1
+      });
+      const road = new THREE.Mesh(roadGeo, roadMat);
+      road.rotation.x = -Math.PI / 2;
+      road.position.y = GROUND_HEIGHT;
+      road.receiveShadow = true;
+      segment.add(road);
+      
+      // Old blood stains on road
+      for(let i = 0; i < 2; i++) {
+        const stainGeo = new THREE.PlaneGeometry(0.2, 0.3);
+        const stainMat = new THREE.MeshBasicMaterial({
+          color: 0x4a0000,
+          transparent: true,
+          opacity: 0.5
+        });
+        const stain = new THREE.Mesh(stainGeo, stainMat);
+        stain.rotation.x = -Math.PI / 2;
+        stain.position.set(
+          (Math.random() - 0.5) * 0.5,
+          GROUND_HEIGHT + 0.001,
+          (Math.random() - 0.5) * SEGMENT_LENGTH * 0.6
+        );
+        stain.rotation.z = Math.random() * Math.PI;
+        segment.add(stain);
+      }
+      
+      // Yellow road lines
+      for (let lane = 0; lane < 4; lane++) {
+        if(Math.random() > 0.3) {
+          const lineGeo = new THREE.BoxGeometry(0.015, 0.002, SEGMENT_LENGTH * 0.3);
+          const lineMat = new THREE.MeshBasicMaterial({ 
+            color: 0xffff00,
+            transparent: true,
+            opacity: 0.6
+          });
+          const line = new THREE.Mesh(lineGeo, lineMat);
+          line.position.set([-0.3, -0.1, 0.1, 0.3][lane], GROUND_HEIGHT + 0.001, 0);
+          segment.add(line);
+        }
+      }
+      
+      // Colorful debris
+      if(Math.random() > 0.5) {
+        const debrisType = Math.random();
+        if(debrisType < 0.3) {
+          // Blue abandoned car
+          const carGeo = new THREE.BoxGeometry(0.1, 0.06, 0.2);
+          const carMat = new THREE.MeshPhongMaterial({
+            color: 0x0066cc,
+            metalness: 0.6,
+            roughness: 0.4
+          });
+          const car = new THREE.Mesh(carGeo, carMat);
+          car.position.set(
+            Math.random() > 0.5 ? -0.35 : 0.35,
+            GROUND_HEIGHT + 0.03,
+            (Math.random() - 0.5) * SEGMENT_LENGTH * 0.6
+          );
+          car.rotation.y = Math.random() * 0.3 - 0.15;
+          segment.add(car);
+        } else if(debrisType < 0.6) {
+          // Red barrel
+          const barrelGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.06, 8);
+          const barrelMat = new THREE.MeshPhongMaterial({
+            color: 0xff0000,
+            metalness: 0.3
+          });
+          const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+          barrel.position.set(
+            (Math.random() - 0.5) * 0.7,
+            GROUND_HEIGHT + 0.03,
+            (Math.random() - 0.5) * SEGMENT_LENGTH * 0.6
+          );
+          segment.add(barrel);
+        }
+      }
+      
+      // Spawn zombie hordes
+      if (Math.random() > 0.2 && zPos < -3) {
+        const zombieCount = Math.floor(Math.random() * 4) + 2; // More zombies!
+        for(let i = 0; i < zombieCount; i++) {
+          const zombie = createDetailedZombie();
+          zombie.position.set(
+            LANES[Math.floor(Math.random() * 3)] + (Math.random() - 0.5) * 0.08,
+            GROUND_HEIGHT + 0.08,
+            (Math.random() - 0.5) * SEGMENT_LENGTH * 0.5
+          );
+          segment.add(zombie);
+          zombies.push({ mesh: zombie, segment: segment, lane: zombie.position.x });
+        }
+      }
+      
+      segment.position.z = zPos;
+      scene.add(segment);
+      roadSegments.push(segment);
+    }
+    
+    function createDetailedZombie() {
+      const zombie = new THREE.Group();
+      const skinColors = [0x667755, 0x556644, 0x778866, 0x445533];
+      const skinColor = skinColors[Math.floor(Math.random() * skinColors.length)];
+      
+      // Torso with torn shirt
+      const torsoGeo = new THREE.BoxGeometry(0.04, 0.08, 0.025);
+      const torsoMat = new THREE.MeshPhongMaterial({
+        color: skinColor,
+        roughness: 0.9
+      });
+      const torso = new THREE.Mesh(torsoGeo, torsoMat);
+      torso.position.y = 0.04;
+      zombie.add(torso);
+      
+      // Torn shirt pieces in different colors
+      const shirtColors = [0x0000ff, 0xff0000, 0x00ff00, 0xffff00, 0xff00ff];
+      const shirtColor = shirtColors[Math.floor(Math.random() * shirtColors.length)];
+      for(let i = 0; i < 2; i++) {
+        const shirtGeo = new THREE.PlaneGeometry(0.03, 0.05);
+        const shirtMat = new THREE.MeshBasicMaterial({
+          color: shirtColor,
+          transparent: true,
+          opacity: 0.7,
+          side: THREE.DoubleSide
+        });
+        const shirt = new THREE.Mesh(shirtGeo, shirtMat);
+        shirt.position.set(
+          (Math.random() - 0.5) * 0.02,
+          0.04,
+          -0.014
+        );
+        shirt.rotation.z = (Math.random() - 0.5) * 0.3;
+        zombie.add(shirt);
+      }
+      
+      // Detailed head
+      const headGeo = new THREE.BoxGeometry(0.03, 0.035, 0.03);
+      const headMat = new THREE.MeshPhongMaterial({
+        color: skinColor,
+        roughness: 0.8
+      });
+      const head = new THREE.Mesh(headGeo, headMat);
+      head.position.y = 0.095;
+      zombie.add(head);
+      
+      // ## CHANGE: Glowing RED eyes with point lights
+      for(let i = 0; i < 2; i++) {
+        const eyeGeo = new THREE.SphereGeometry(0.005, 4, 4);
+        const eyeMat = new THREE.MeshBasicMaterial({
+          color: 0xff0000,
+          emissive: 0xff0000,
+          emissiveIntensity: 4
+        });
+        const eye = new THREE.Mesh(eyeGeo, eyeMat);
+        eye.position.set(i === 0 ? -0.01 : 0.01, 0.095, -0.015);
+        zombie.add(eye);
+        
+        // Add a small red light to each eye to cast a glow
+        const eyeLight = new THREE.PointLight(0xff0000, 2, 0.5);
+        eyeLight.position.copy(eye.position);
+        zombie.add(eyeLight);
+      }
+      
+      // Exposed teeth/jaw
+      const jawGeo = new THREE.BoxGeometry(0.025, 0.008, 0.005);
+      const jawMat = new THREE.MeshBasicMaterial({
+        color: 0xffffcc
+      });
+      const jaw = new THREE.Mesh(jawGeo, jawMat);
+      jaw.position.set(0, 0.082, -0.015);
+      zombie.add(jaw);
+      
+      // Arms
+      for(let side = 0; side < 2; side++) {
+        const armGeo = new THREE.CapsuleGeometry(0.008, 0.05, 4, 4);
+        const arm = new THREE.Mesh(armGeo, torsoMat);
+        arm.position.set(side === 0 ? -0.03 : 0.03, 0.03, 0);
+        arm.rotation.z = (side === 0 ? -0.3 : 0.3) + Math.random() * 0.2;
+        zombie.add(arm);
+        
+        // Hands with fingers
+        const handGeo = new THREE.BoxGeometry(0.01, 0.015, 0.008);
+        const hand = new THREE.Mesh(handGeo, torsoMat);
+        hand.position.set(side === 0 ? -0.04 : 0.04, 0, 0);
+        zombie.add(hand);
+      }
+      
+      // Legs with pants
+      for(let side = 0; side < 2; side++) {
+        const legGeo = new THREE.CapsuleGeometry(0.01, 0.04, 4, 4);
+        const legMat = new THREE.MeshPhongMaterial({
+          color: 0x333366,
+          roughness: 0.8
+        });
+        const leg = new THREE.Mesh(legGeo, legMat);
+        leg.position.set(side === 0 ? -0.012 : 0.012, -0.02, 0);
+        zombie.add(leg);
+      }
+      
+      // Massive wounds and gore
+      for(let i = 0; i < 3; i++) {
+        const woundGeo = new THREE.SphereGeometry(0.01, 4, 4);
+        const woundMat = new THREE.MeshBasicMaterial({
+          color: 0xff0000,
+          emissive: 0x660000,
+          emissiveIntensity: 0.5
+        });
+        const wound = new THREE.Mesh(woundGeo, woundMat);
+        wound.position.set(
+          (Math.random() - 0.5) * 0.04,
+          Math.random() * 0.08,
+          -0.013
+        );
+        wound.scale.y = 0.6;
+        zombie.add(wound);
+      }
+      
+      // Entrails hanging out (for some zombies)
+      if(Math.random() > 0.6) {
+        const entrailGeo = new THREE.CylinderGeometry(0.003, 0.005, 0.03, 4);
+        const entrailMat = new THREE.MeshBasicMaterial({
+          color: 0x990033,
+          transparent: true,
+          opacity: 0.8
+        });
+        const entrail = new THREE.Mesh(entrailGeo, entrailMat);
+        entrail.position.set(0, 0.01, -0.01);
+        entrail.rotation.z = Math.random() * 0.3;
+        zombie.add(entrail);
+      }
+      
+      zombie.userData.shambleOffset = Math.random() * Math.PI * 2;
+      zombie.userData.shambleSpeed = 0.5 + Math.random() * 2;
+      zombie.userData.armSwing = Math.random() > 0.5;
+      zombie.castShadow = true;
+      
+      return zombie;
+    }
+    
+    // ## CHANGE: Reduced blood amount
+    function createMassiveBloodSplatter(position) {
+      // Create blood particles (reduced from 50 to 10)
+      for(let i = 0; i < 10; i++) {
+        const geo = new THREE.SphereGeometry(0.005 + Math.random() * 0.02, 6, 6);
+        const mat = new THREE.MeshBasicMaterial({
+          color: Math.random() > 0.3 ? 0xff0000 : 0x660000,
+          transparent: true,
+          opacity: 0.9
+        });
+        const drop = new THREE.Mesh(geo, mat);
+        drop.position.copy(position);
+        drop.position.x += (Math.random() - 0.5) * 0.2;
+        drop.position.y += Math.random() * 0.1;
+        drop.position.z += (Math.random() - 0.5) * 0.2;
+        
+        drop.userData.velocity = new THREE.Vector3(
+          (Math.random() - 0.5) * 0.08,
+          Math.random() * 0.1 + 0.02,
+          (Math.random() - 0.5) * 0.08
+        );
+        bloodSplatters.push(drop);
+        scene.add(drop);
+      }
+      
+      // Create large blood pool
+      const poolGeo = new THREE.PlaneGeometry(0.3, 0.3);
+      const poolMat = new THREE.MeshBasicMaterial({
+        color: 0x660000,
+        transparent: true,
+        opacity: 0.8
+      });
+      const pool = new THREE.Mesh(poolGeo, poolMat);
+      pool.rotation.x = -Math.PI / 2;
+      pool.position.copy(position);
+      pool.position.y = GROUND_HEIGHT + 0.0002;
+      bloodPools.push(pool);
+      scene.add(pool);
+      
+      // Create blood spray on nearby surfaces (reduced from 10 to 2)
+      for(let i = 0; i < 2; i++) {
+        const sprayGeo = new THREE.PlaneGeometry(0.05, 0.08);
+        const sprayMat = new THREE.MeshBasicMaterial({
+          color: 0xff0000,
+          transparent: true,
+          opacity: 0.7
+        });
+        const spray = new THREE.Mesh(sprayGeo, sprayMat);
+        spray.position.set(
+          position.x + (Math.random() - 0.5) * 0.4,
+          GROUND_HEIGHT + Math.random() * 0.2,
+          position.z + (Math.random() - 0.5) * 0.4
+        );
+        spray.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+        scene.add(spray);
+        bloodSplatters.push(spray);
+      }
+    }
+    
+    function createBodyParts(position) {
+      const parts = ['arm', 'leg', 'head', 'torso'];
+      const partCount = Math.floor(Math.random() * 2) + 2;
+      
+      for(let i = 0; i < partCount; i++) {
+        const partType = parts[Math.floor(Math.random() * parts.length)];
+        let partMesh;
+        
+        switch(partType) {
+          case 'arm':
+            partMesh = new THREE.Mesh(
+              new THREE.CapsuleGeometry(0.008, 0.05, 4, 4),
+              new THREE.MeshPhongMaterial({ color: 0x667755 })
+            );
+            break;
+          case 'leg':
+            partMesh = new THREE.Mesh(
+              new THREE.CapsuleGeometry(0.01, 0.04, 4, 4),
+              new THREE.MeshPhongMaterial({ color: 0x333366 })
+            );
+            break;
+          case 'head':
+            partMesh = new THREE.Mesh(
+              new THREE.BoxGeometry(0.03, 0.035, 0.03),
+              new THREE.MeshPhongMaterial({ color: 0x556644 })
+            );
+            break;
+          case 'torso':
+            partMesh = new THREE.Mesh(
+              new THREE.BoxGeometry(0.04, 0.08, 0.025),
+              new THREE.MeshPhongMaterial({ color: 0x667755 })
+            );
+            break;
+        }
+        
+        partMesh.position.copy(position);
+        partMesh.userData.velocity = new THREE.Vector3(
+          (Math.random() - 0.5) * 0.15,
+          Math.random() * 0.2 + 0.1,
+          (Math.random() - 0.5) * 0.15
+        );
+        partMesh.userData.rotationSpeed = new THREE.Vector3(
+          Math.random() * 0.2,
+          Math.random() * 0.2,
+          Math.random() * 0.2
+        );
+        bodyParts.push(partMesh);
+        scene.add(partMesh);
+      }
+    }
+    
+    function createExhaustSmoke() {
+      const smokeGeo = new THREE.SphereGeometry(0.02, 6, 6);
+      const smokeMat = new THREE.MeshBasicMaterial({
+        color: 0x444444,
+        transparent: true,
+        opacity: 0.5
+      });
+      const smoke = new THREE.Mesh(smokeGeo, smokeMat);
+      smoke.position.copy(truck.position);
+      smoke.position.y += 0.08;
+      smoke.position.z += 0.18;
+      smoke.position.x += (Math.random() - 0.5) * 0.12;
+      
+      smoke.userData.velocity = new THREE.Vector3(
+        (Math.random() - 0.5) * 0.01,
+        Math.random() * 0.02,
+        0.05
+      );
+      
+      exhaustSmoke.push(smoke);
+      scene.add(smoke);
+    }
+    
+    // ## CHANGE: New function to create a woodland environment
+    function createWoodland() {
+      // Create a lot of spooky trees
+      for (let i = 0; i < 60; i++) {
+        const tree = new THREE.Group();
+        
+        const trunkHeight = 1 + Math.random() * 1.5;
+        const trunkGeo = new THREE.CylinderGeometry(0.08, 0.12, trunkHeight, 8);
+        const trunkMat = new THREE.MeshPhongMaterial({ color: 0x4a2a2a });
+        const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+        trunk.position.y = trunkHeight / 2;
+        tree.add(trunk);
+        
+        const foliageGeo = new THREE.IcosahedronGeometry(0.6 + Math.random() * 0.4, 1);
+        const foliageMat = new THREE.MeshPhongMaterial({ color: 0x1a4a1a, flatShading: true });
+        const foliage = new THREE.Mesh(foliageGeo, foliageMat);
+        foliage.position.y = trunkHeight;
+        tree.add(foliage);
+        
+        tree.castShadow = true;
+        trunk.castShadow = true;
+        foliage.castShadow = true;
+
+        tree.position.set(
+          (Math.random() > 0.5 ? 1 : -1) * (1.2 + Math.random() * 5),
+          GROUND_HEIGHT,
+          -5 - Math.random() * 45
+        );
+        tree.rotation.y = Math.random() * Math.PI;
+        scene.add(tree);
+      }
+      
+      // Keep neon signs and billboards for the grindhouse feel
+      for(let i = 0; i < 5; i++) {
+        const signGeo = new THREE.BoxGeometry(0.8, 0.4, 0.05);
+        const signColors = [0xff00ff, 0x00ffff, 0xffff00, 0xff0000, 0x00ff00];
+        const signMat = new THREE.MeshBasicMaterial({
+          color: signColors[i],
+          emissive: signColors[i],
+          emissiveIntensity: 2
+        });
+        const sign = new THREE.Mesh(signGeo, signMat);
+        sign.position.set(
+          (Math.random() > 0.5 ? 1 : -1) * (2 + Math.random()),
+          GROUND_HEIGHT + 1 + Math.random() * 0.5,
+          -5 - i * 5
+        );
+        scene.add(sign);
+        
+        // Add glow
+        const light = new THREE.PointLight(signColors[i], 1, 3);
+        light.position.copy(sign.position);
+        scene.add(light);
+      }
+    }
+    
+    function createScreenBlood() {
+      // Multiple blood splatters on screen
+      for(let i = 0; i < 5; i++) {
+        const bloodGeo = new THREE.PlaneGeometry(
+          0.05 + Math.random() * 0.1,
+          0.08 + Math.random() * 0.12
+        );
+        const bloodMat = new THREE.MeshBasicMaterial({
+          color: 0xff0000,
+          transparent: true,
+          opacity: 0.7 + Math.random() * 0.3,
+          side: THREE.DoubleSide
+        });
+        const blood = new THREE.Mesh(bloodGeo, bloodMat);
+        blood.position.set(
+          (Math.random() - 0.5) * 0.4,
+          (Math.random() - 0.5) * 0.3,
+          -0.35
+        );
+        blood.rotation.z = Math.random() * Math.PI;
+        
+        if(camera.parent) {
+          camera.parent.add(blood);
+        } else {
+          camera.add(blood);
+        }
+        
+        screenBlood.push(blood);
+      }
+    }
+    
+    async function startARSession() {
+      if (!navigator.xr) { alert('WebXR not supported'); return; }
+      try {
+        const session = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['hit-test'],
+          optionalFeatures: ['dom-overlay'],
+          domOverlay: { root: document.body }
+        });
+        onSessionStarted(session);
+      } catch (error) { alert('Failed to start AR: ' + error.message); }
+    }
+    
+    function onSessionStarted(session) {
+      xrSession = session;
+      document.getElementById('overlay').classList.add('webxr-hidden');
+      renderer.xr.setReferenceSpaceType('local');
+      renderer.xr.setSession(session);
+      setupControllers(session);
+      renderer.setAnimationLoop(render);
+      session.addEventListener('end', onSessionEnd);
+      startControllerSelection();
+    }
+    
+    function startControllerSelection() {
+      isControllerSelectionPhase = true;
+      controllerSelectionStartTime = clock.getElapsedTime();
+      controllerHoldStartTime = {};
+    }
+    
+    function setupControllers(session) {
+      controllers = [];
+      for (let i = 0; i < 2; i++) {
+        const controller = renderer.xr.getController(i);
+        scene.add(controller);
+        controllers.push(controller);
+      }
+    }
+    
+    function checkControllerSelection() {
+      if (!isControllerSelectionPhase) return;
+      
+      const currentTime = clock.getElapsedTime();
+      let highestY = -999, highestIndex = -1;
+      
+      for (let i = 0; i < controllers.length; i++) {
+        if (controllers[i].visible && controllers[i].position.y > highestY) {
+          highestY = controllers[i].position.y;
+          highestIndex = i;
+        }
+      }
+      
+      if (highestIndex >= 0) {
+        const ctrl = controllers[highestIndex];
+        const inFront = ctrl.position.z > -0.8 && ctrl.position.z < -0.3 && Math.abs(ctrl.position.x) < 0.3;
+        
+        if (inFront) {
+          if (!controllerHoldStartTime[highestIndex]) controllerHoldStartTime[highestIndex] = currentTime;
+          if ((currentTime - controllerHoldStartTime[highestIndex]) * 1000 >= 3000) {
+            activeController = ctrl;
+            activeControllerIndex = highestIndex;
+            isControllerSelectionPhase = false;
+          }
+        } else { controllerHoldStartTime[highestIndex] = null; }
+      }
+      
+      if ((currentTime - controllerSelectionStartTime) * 1000 >= 10000) {
+        activeController = controllers[0];
+        isControllerSelectionPhase = false;
+      }
+    }
+    
+    function updateGame() {
+      time += 0.016;
+      
+      // Controller steering
+      if (activeController && activeController.visible) {
+        const ctrlX = activeController.position.x;
+        if (ctrlX < -0.15) targetLane = 0;
+        else if (ctrlX > 0.15) targetLane = 2;
+        else targetLane = 1;
+      }
+      
+      // Truck movement with more violent shaking
+      const targetX = LANES[targetLane];
+      const deltaX = targetX - truck.position.x;
+      truck.position.x += deltaX * 0.1;
+      truck.rotation.z = deltaX * 2.5;
+      truck.rotation.y = deltaX * 0.4;
+      
+      // Intense truck bounce
+      truck.position.y = GROUND_HEIGHT + 0.06 + Math.sin(time * 10) * 0.004 + Math.cos(time * 15) * 0.002;
+      truck.rotation.x = Math.sin(time * 12) * 0.02;
+      
+      // Animate zombies
+      zombies.forEach(zombie => {
+        if(zombie.mesh) {
+          zombie.mesh.rotation.y = Math.sin(time * zombie.mesh.userData.shambleSpeed + zombie.mesh.userData.shambleOffset) * 0.3;
+          zombie.mesh.position.y = GROUND_HEIGHT + 0.08 + Math.abs(Math.sin(time * zombie.mesh.userData.shambleSpeed * 2)) * 0.02;
+          
+          // Arm swing
+          if(zombie.mesh.userData.armSwing && zombie.mesh.children.length > 3) {
+            zombie.mesh.children[3].rotation.x = Math.sin(time * 3) * 0.3;
+            zombie.mesh.children[4].rotation.x = -Math.sin(time * 3) * 0.3;
+          }
+        }
+      });
+      
+      // Create exhaust smoke
+      if (Math.random() > 0.6) createExhaustSmoke();
+      
+      // Update exhaust smoke
+      exhaustSmoke.forEach((smoke, i) => {
+        smoke.position.add(smoke.userData.velocity);
+        smoke.scale.multiplyScalar(1.08);
+        smoke.material.opacity -= 0.015;
+        if (smoke.material.opacity <= 0) {
+          scene.remove(smoke);
+          exhaustSmoke.splice(i, 1);
+        }
+      });
+      
+      // Update blood splatters with physics
+      bloodSplatters.forEach((splatter, i) => {
+        if(splatter.userData && splatter.userData.velocity) {
+          splatter.position.add(splatter.userData.velocity);
+          splatter.userData.velocity.y -= 0.005; // Gravity
+          
+          if(splatter.position.y <= GROUND_HEIGHT + 0.001) {
+            splatter.position.y = GROUND_HEIGHT + 0.001;
+            splatter.scale.x *= 2;
+            splatter.scale.z *= 2;
+            splatter.scale.y = 0.05;
+            delete splatter.userData.velocity;
+          }
+        }
+        
+        if(splatter.material) {
+          splatter.material.opacity -= 0.002;
+          if (splatter.material.opacity <= 0) {
+            scene.remove(splatter);
+            bloodSplatters.splice(i, 1);
+          }
+        }
+      });
+      
+      // Update body parts
+      bodyParts.forEach((part, i) => {
+        if(part.userData.velocity) {
+          part.position.add(part.userData.velocity);
+          part.userData.velocity.y -= 0.008;
+          
+          if(part.userData.rotationSpeed) {
+            part.rotation.x += part.userData.rotationSpeed.x;
+            part.rotation.y += part.userData.rotationSpeed.y;
+            part.rotation.z += part.userData.rotationSpeed.z;
+          }
+          
+          if(part.position.y <= GROUND_HEIGHT + 0.02) {
+            part.position.y = GROUND_HEIGHT + 0.02;
+            part.userData.velocity.multiplyScalar(0.5);
+            part.userData.rotationSpeed.multiplyScalar(0.7);
+            
+            if(part.userData.velocity.length() < 0.01) {
+              delete part.userData.velocity;
+              delete part.userData.rotationSpeed;
+            }
+          }
+        }
+      });
+      
+      // Update blood pools (slowly expand)
+      bloodPools.forEach(pool => {
+        pool.scale.x += 0.002;
+        pool.scale.y += 0.002;
+        pool.material.opacity -= 0.0005;
+      });
+      
+      // Move road segments
+      roadSegments.forEach((segment, index) => {
+        segment.position.z += speed;
+        if (segment.position.z > 2) {
+          scene.remove(segment);
+          roadSegments.splice(index, 1);
+          
+          const furthestZ = Math.min(...roadSegments.map(s => s.position.z));
+          createRoadSegment(furthestZ - SEGMENT_LENGTH);
+        }
+      });
+      
+      // Check zombie collisions with MASSIVE gore
+      zombies.forEach((zombie, index) => {
+        if(!zombie.mesh || !zombie.mesh.parent) {
+          zombies.splice(index, 1);
+          return;
+        }
+        
+        const zombieWorldPos = new THREE.Vector3();
+        zombie.mesh.getWorldPosition(zombieWorldPos);
+        const dist = Math.abs(zombieWorldPos.z - truck.position.z);
+        const laneDist = Math.abs(zombie.lane - truck.position.x);
+        
+        if (dist < 0.2 && laneDist < 0.14) {
+          // GORE EXPLOSION!
+          createMassiveBloodSplatter(zombieWorldPos);
+          createBodyParts(zombieWorldPos);
+          createScreenBlood();
+          
+          // ## CHANGE: Reduced extra blood fountains from 3 to 1
+          for(let j = 0; j < 1; j++) {
+            setTimeout(() => {
+              const extraPos = zombieWorldPos.clone();
+              extraPos.x += (Math.random() - 0.5) * 0.1;
+              extraPos.z += (Math.random() - 0.5) * 0.1;
+              createMassiveBloodSplatter(extraPos);
+            }, j * 100);
+          }
+          
+          // Remove zombie
+          if(zombie.segment) zombie.segment.remove(zombie.mesh);
+          zombies.splice(index, 1);
+          
+          killCount++;
+          score += 100;
+          
+          // Intense camera shake
+          if(camera.parent) {
+            camera.position.x += (Math.random() - 0.5) * 0.04;
+            camera.position.y += (Math.random() - 0.5) * 0.04;
+            camera.rotation.z += (Math.random() - 0.5) * 0.02;
+          }
+          
+          // Speed boost from kill
+          speed = Math.min(0.35, speed + 0.01);
+        }
+      });
+      
+      // Update screen blood effects
+      screenBlood.forEach((blood, i) => {
+        blood.material.opacity -= 0.006;
+        blood.position.y -= 0.002;
+        if(blood.material.opacity <= 0) {
+          if(blood.parent) blood.parent.remove(blood);
+          screenBlood.splice(i, 1);
+        }
+      });
+      
+      // Pulsing neon lights
+      scene.children.forEach(child => {
+        if (child.isPointLight && child.color) {
+          child.intensity = 2 + Math.sin(time * 3 + child.position.x) * 0.8;
+        }
+      });
+      
+      speed = Math.min(0.28, speed + 0.0002);
+      score += speed * 5 + killCount * 2;
+    }
+    
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+    
+    function onSessionEnd() {
+      document.getElementById('overlay').classList.remove('webxr-hidden');
+      renderer.setAnimationLoop(null);
+      xrSession = null;
+    }
+    
+    function render(timestamp, frame) {
+      if (frame) {
+        if (isControllerSelectionPhase) checkControllerSelection();
+        else updateGame();
+      }
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
